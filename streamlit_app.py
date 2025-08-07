@@ -19,7 +19,7 @@ with st.sidebar:
     st.markdown("---")
     st.info("Configure os parâmetros técnicos acima")
 
-# Baixar dados do BTC com tratamento robusto
+# Baixar dados do BTC
 @st.cache_data
 def load_data():
     try:
@@ -35,37 +35,38 @@ def load_data():
 df = load_data()
 
 if not df.empty:
-    # Garantir que temos dados suficientes
-    if len(df) < max(sma_period, 20, rsi_period):
-        st.warning(f"Dados insuficientes. Necessário pelo menos {max(sma_period, 20, rsi_period)} períodos.")
+    # Verificar dados suficientes
+    required_periods = max(sma_period, 20, rsi_period)
+    if len(df) < required_periods:
+        st.warning(f"Dados insuficientes. Necessário pelo menos {required_periods} períodos.")
     else:
-        # Criar DataFrame com índice comum
-        analysis_df = df[['Close']].copy()
-        analysis_df.index = pd.to_datetime(analysis_df.index)
+        # Criar cópia para análise
+        analysis_df = df.copy()
         
-        # Calcular indicadores técnicos
+        # Calcular indicadores diretamente no DataFrame
         analysis_df['SMA'] = analysis_df['Close'].rolling(sma_period).mean()
         
-        # Calcular RSI
+        # Cálculo do RSI
         delta = analysis_df['Close'].diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
         avg_gain = gain.rolling(rsi_period).mean()
         avg_loss = loss.rolling(rsi_period).mean()
-        rs = avg_gain / (avg_loss + 1e-10)
+        rs = avg_gain / (avg_loss.replace(0, np.nan)  # Evitar divisão por zero
         analysis_df['RSI'] = 100 - (100 / (1 + rs))
         
-        # Calcular Bollinger Bands
-        rolling_mean = analysis_df['Close'].rolling(20).mean()
-        rolling_std = analysis_df['Close'].rolling(20).std()
-        analysis_df['BB_Upper'] = rolling_mean + 2 * rolling_std
-        analysis_df['BB_Lower'] = rolling_mean - 2 * rolling_std
-        analysis_df['BB_Width'] = ((analysis_df['BB_Upper'] - analysis_df['BB_Lower']) / rolling_mean) * 100
+        # Bollinger Bands
+        analysis_df['BB_Middle'] = analysis_df['Close'].rolling(20).mean()
+        analysis_df['BB_Upper'] = analysis_df['BB_Middle'] + 2 * analysis_df['Close'].rolling(20).std()
+        analysis_df['BB_Lower'] = analysis_df['BB_Middle'] - 2 * analysis_df['Close'].rolling(20).std()
         
-        # Remover valores NaN
+        # Remover linhas com valores NaN
         analysis_df = analysis_df.dropna()
         
-        # Definir estados
+        # Calcular largura das Bandas de Bollinger
+        analysis_df['BB_Width'] = ((analysis_df['BB_Upper'] - analysis_df['BB_Lower']) / analysis_df['BB_Middle']) * 100
+        
+        # Definir estados de mercado
         conditions = [
             (analysis_df['Close'] > analysis_df['SMA']) & (analysis_df['RSI'] > 60),
             (analysis_df['Close'] < analysis_df['SMA']) & (analysis_df['RSI'] < 40),
@@ -99,9 +100,9 @@ if not df.empty:
         for estado, color in zip(['Bull', 'Bear', 'Consolid'], 
                                ['rgba(46,139,87,0.2)', 'rgba(178,34,34,0.2)', 'rgba(30,144,255,0.2)']):
             mask = analysis_df['Estado'] == estado
-            changes = mask.ne(mask.shift(1))
-            starts = analysis_df.index[changes & mask]
-            ends = analysis_df.index[changes & ~mask]
+            changes = mask.astype(int).diff()
+            starts = analysis_df.index[changes == 1]
+            ends = analysis_df.index[changes == -1]
             
             if len(starts) > len(ends):
                 ends = ends.append(pd.DatetimeIndex([analysis_df.index[-1]]))
