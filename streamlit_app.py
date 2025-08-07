@@ -46,13 +46,13 @@ if not df.empty:
         # Calcular indicadores diretamente no DataFrame
         analysis_df['SMA'] = analysis_df['Close'].rolling(sma_period).mean()
         
-        # Cálculo do RSI
+        # Cálculo do RSI CORRIGIDO (parêntese fechado)
         delta = analysis_df['Close'].diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
         avg_gain = gain.rolling(rsi_period).mean()
         avg_loss = loss.rolling(rsi_period).mean()
-        rs = avg_gain / (avg_loss.replace(0, np.nan)  # Evitar divisão por zero
+        rs = avg_gain / (avg_loss.replace(0, np.nan))  # Parêntese fechado aqui
         analysis_df['RSI'] = 100 - (100 / (1 + rs))
         
         # Bollinger Bands
