@@ -26,13 +26,20 @@ def carregar_modelo():
 
 modelo = carregar_modelo()
 
-# Função para criar features
+# Função para criar features - VERSÃO CORRIGIDA
 def criar_features(df):
-    # Indicadores técnicos básicos
+    # Cálculo do RSI CORRIGIDO
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
+    rs = avg_gain / (avg_loss.replace(0, np.nan))  # Evita divisão por zero
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # Outros indicadores
     df['SMA_50'] = df['Close'].rolling(50).mean()
     df['SMA_200'] = df['Close'].rolling(200).mean()
-    df['RSI'] = 100 - (100 / (1 + (df['Close'].diff().clip(lower=0).rolling(14).mean() / 
-                       -df['Close'].diff().clip(upper=0).rolling(14).mean()))
     
     # Bollinger Bands
     df['BB_Upper'] = df['Close'].rolling(20).mean() + 2*df['Close'].rolling(20).std()
