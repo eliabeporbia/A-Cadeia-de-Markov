@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -23,13 +22,23 @@ def load_data():
 
 df = load_data()
 
-# Cálculos técnicos
+# Cálculos técnicos - CORREÇÃO AQUI
+def calculate_rsi(prices, period=14):
+    delta = prices.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
 df["SMA"] = df["Close"].rolling(sma_period).mean()
-df["RSI"] = 100 - (100 / (1 + (df["Close"].diff(1).clip(lower=0).rolling(rsi_period).mean() / 
-                      -df["Close"].diff(1).clip(upper=0).rolling(rsi_period).mean()))
-df["BB_Upper"], df["BB_Middle"], df["BB_Lower"] = df["Close"].rolling(20).mean() + 2*df["Close"].rolling(20).std(), \
-                                                 df["Close"].rolling(20).mean(), \
-                                                 df["Close"].rolling(20).mean() - 2*df["Close"].rolling(20).std()
+df["RSI"] = calculate_rsi(df["Close"], rsi_period)
+df["BB_Upper"] = df["Close"].rolling(20).mean() + 2*df["Close"].rolling(20).std()
+df["BB_Middle"] = df["Close"].rolling(20).mean()
+df["BB_Lower"] = df["Close"].rolling(20).mean() - 2*df["Close"].rolling(20).std()
 df["BB_Width"] = ((df["BB_Upper"] - df["BB_Lower"]) / df["BB_Middle"]) * 100
 
 # Definir estados
@@ -52,10 +61,11 @@ fig.add_trace(go.Scatter(x=df.index, y=df["SMA"], name=f"SMA {sma_period}", line
 for estado, color in zip(["Bull", "Bear", "Consolid"], ["rgba(46,139,87,0.2)", "rgba(178,34,34,0.2)", "rgba(30,144,255,0.2)"]):
     subset = df[df["Estado"] == estado]
     if not subset.empty:
-        fig.add_vrect(
-            x0=subset.index[0], x1=subset.index[-1],
-            fillcolor=color, layer="below", line_width=0
-        )
+        for i in range(len(subset)-1):
+            fig.add_vrect(
+                x0=subset.index[i], x1=subset.index[i+1],
+                fillcolor=color, layer="below", line_width=0
+            )
 
 # Layout do gráfico
 fig.update_layout(
