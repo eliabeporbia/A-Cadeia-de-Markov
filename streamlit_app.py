@@ -7,7 +7,7 @@ from datetime import datetime
 
 # Configuração do app
 st.set_page_config(layout="wide")
-st.title("📊 Indicador Markov-Queue BTC - Versão Final Estável")
+st.title("📊 Indicador Markov-Queue BTC - Versão Estável Final")
 
 # Sidebar com parâmetros
 with st.sidebar:
@@ -21,18 +21,20 @@ with st.sidebar:
 @st.cache_data
 def carregar_dados():
     try:
-        # Baixar dados e garantir que retorna um DataFrame
+        # Baixar dados e converter para Series antes de transformar em DataFrame
         dados = yf.download("BTC-USD", 
                           start=data_inicio, 
                           end=data_fim + pd.Timedelta(days=1),
                           progress=False)
         
-        # Verificar se temos dados e criar DataFrame corretamente
-        if not dados.empty:
-            # Criar novo DataFrame apenas com a coluna Close
-            df = pd.DataFrame({'Close': dados['Close'].values}, index=dados.index)
-            return df
-        return pd.DataFrame()
+        if dados.empty:
+            return pd.DataFrame()
+            
+        # Converter para Series e depois para DataFrame corretamente
+        close_series = dados['Close'].squeeze()  # Converte para Series
+        df = pd.DataFrame({'Close': close_series})  # Cria DataFrame com 1 coluna
+        
+        return df
     except Exception as erro:
         st.error(f"Erro ao baixar dados: {str(erro)}")
         return pd.DataFrame()
@@ -53,11 +55,11 @@ if not dados_btc.empty:
     dados_btc['RSI'] = 100 - (100 / (1 + (media_ganho / media_perda)))
     
     # Bollinger Bands
-    media_bb = dados_btc['Close'].rolling(20).mean()
-    desvio_bb = dados_btc['Close'].rolling(20).std()
-    dados_btc['BB_Upper'] = media_bb + 2 * desvio_bb
-    dados_btc['BB_Lower'] = media_bb - 2 * desvio_bb
-    dados_btc['BB_Width'] = ((dados_btc['BB_Upper'] - dados_btc['BB_Lower']) / media_bb) * 100
+    rolling_mean = dados_btc['Close'].rolling(20).mean()
+    rolling_std = dados_btc['Close'].rolling(20).std()
+    dados_btc['BB_Upper'] = rolling_mean + 2 * rolling_std
+    dados_btc['BB_Lower'] = rolling_mean - 2 * rolling_std
+    dados_btc['BB_Width'] = ((dados_btc['BB_Upper'] - dados_btc['BB_Lower']) / rolling_mean) * 100
     
     # Remover NaN
     dados_btc = dados_btc.dropna()
