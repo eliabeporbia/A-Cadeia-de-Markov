@@ -1,9 +1,5 @@
-# Requisitos básicos
-streamlit==1.22.0
-plotly==5.11.0
-yfinance==0.2.18
-pandas==1.5.3
-numpy==1.23.5
-
-# Bibliotecas adicionais (se necessário)
-python-dotenv>=0.19.0  # Para variáveis de ambiente
+streamlit>=1.22.0
+plotly>=5.11.0
+yfinance>=0.2.18
+pandas>=1.5.0
+numpy>=1.23.0
