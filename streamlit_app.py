@@ -5,8 +5,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from sklearn.model_selection import TimeSeriesSplit
 import joblib
 import os
 import hashlib
@@ -15,165 +14,190 @@ warnings.filterwarnings('ignore')
 
 # Configuração do app
 st.set_page_config(layout="wide")
-st.title("🧠 BTC AI Learner - Autoajustável")
+st.title("🚀 BTC AI Trader - Sistema Autoaprendiz")
 
-class AprendizBTC:
+class BitcoinAI:
     def __init__(self):
-        self.modelo = None
-        self.ultimo_treinamento = None
-        self.historico_acuracia = []
-        self.carregar_modelo()
+        self.model = None
+        self.data = None
+        self.initialize_model()
         
-    def carregar_modelo(self):
-        """Carrega ou cria um novo modelo com verificação de integridade"""
+    def initialize_model(self):
+        """Inicializa ou carrega o modelo com verificação de integridade"""
+        model_path = 'btc_ai_model.pkl'
         try:
-            if os.path.exists('modelo_btc_ai.pkl'):
-                with open('modelo_btc_ai.pkl', 'rb') as f:
-                    modelo_hash = hashlib.md5(f.read()).hexdigest()
-                
-                if modelo_hash == st.secrets.get("MODEL_HASH", ""):
-                    self.modelo = joblib.load('modelo_btc_ai.pkl')
-                    st.sidebar.success("Modelo IA carregado!")
-                else:
-                    raise ValueError("Hash do modelo inválido")
-            else:
-                self.criar_novo_modelo()
+            if os.path.exists(model_path):
+                # Verificação adicional de integridade
+                if os.path.getsize(model_path) > 0:
+                    self.model = joblib.load(model_path)
+                    st.sidebar.success("Modelo carregado com sucesso!")
+                    return
+            
+            # Se falhar ao carregar, cria novo modelo
+            self.create_new_model()
+            
         except Exception as e:
             st.sidebar.warning(f"Resetando modelo: {str(e)}")
-            self.criar_novo_modelo()
+            self.create_new_model()
     
-    def criar_novo_modelo(self):
-        """Inicializa um novo modelo com parâmetros otimizados"""
-        self.modelo = RandomForestClassifier(
-            n_estimators=200,
-            max_depth=10,
-            min_samples_split=5,
+    def create_new_model(self):
+        """Cria um novo modelo com parâmetros otimizados"""
+        self.model = RandomForestClassifier(
+            n_estimators=150,
+            max_depth=12,
+            min_samples_split=6,
             random_state=42,
-            warm_start=True  # Permite aprendizado contínuo
+            warm_start=True,
+            n_jobs=-1
         )
-        st.sidebar.info("Novo modelo IA criado!")
+        st.sidebar.info("Novo modelo criado!")
+        self.save_model()
     
-    def preparar_dados(self):
-        """Baixa e processa os dados com tratamento de erros"""
+    def save_model(self):
+        """Salva o modelo com verificação de integridade"""
         try:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=365*3)
+            temp_path = 'temp_model.pkl'
+            joblib.dump(self.model, temp_path)
             
-            dados = yf.download("BTC-USD", start=start_date, end=end_date, progress=False)
-            dados = dados[['Close', 'Volume']].ffill().dropna()
-            
-            # Engenharia de features
-            dados['SMA_50'] = dados['Close'].rolling(50).mean()
-            dados['SMA_200'] = dados['Close'].rolling(200).mean()
-            dados['RSI'] = self.calcular_rsi(dados['Close'])
-            dados['Target'] = (dados['Close'].shift(-3) > dados['Close']).astype(int)
-            
-            return dados.dropna()
-        except Exception as e:
-            st.error(f"Erro nos dados: {str(e)}")
-            return pd.DataFrame()
+            # Verifica se o arquivo foi salvo corretamente
+            if os.path.getsize(temp_path) > 0:
+                os.replace(temp_path, 'btc_ai_model.pkl')
+                return True
+            return False
+        except:
+            return False
     
-    def calcular_rsi(self, series, period=14):
-        """Calcula RSI com tratamento de erros"""
+    def load_data(self):
+        """Carrega e processa os dados do BTC"""
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=365*3)
+        
+        try:
+            df = yf.download("BTC-USD", start=start_date, end=end_date, progress=False)
+            if df.empty:
+                raise ValueError("Dados vazios")
+                
+            # Feature engineering
+            df['Returns'] = df['Close'].pct_change()
+            df['SMA_50'] = df['Close'].rolling(50).mean()
+            df['SMA_200'] = df['Close'].rolling(200).mean()
+            df['RSI'] = self.calculate_rsi(df['Close'])
+            df['Volatility'] = df['Returns'].rolling(7).std()
+            
+            # Target (1 se o preço subir nos próximos 3 dias)
+            df['Target'] = (df['Close'].shift(-3) > df['Close']).astype(int)
+            
+            self.data = df.dropna()
+            return True
+            
+        except Exception as e:
+            st.error(f"Erro ao carregar dados: {str(e)}")
+            return False
+    
+    def calculate_rsi(self, series, period=14):
+        """Calcula o RSI de forma robusta"""
         delta = series.diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
         
         avg_gain = gain.rolling(period).mean()
-        avg_loss = loss.rolling(period).mean().replace(0, np.nan)
+        avg_loss = loss.rolling(period).mean()
         
-        rs = avg_gain / avg_loss
-        return 100 - (100 / (1 + rs))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            rs = avg_gain / avg_loss.replace(0, np.nan)
+            rsi = 100 - (100 / (1 + rs))
+            
+        return rsi.fillna(50)  # Valor neutro para casos indeterminados
     
-    def treinar_continuamente(self, dados):
-        """Treinamento com validação e auto-correção"""
+    def train_model(self):
+        """Treina o modelo com validação temporal"""
+        if self.data is None:
+            st.warning("Dados não carregados!")
+            return 0
+            
         try:
-            X = dados[['SMA_50', 'SMA_200', 'RSI', 'Volume']]
-            y = dados['Target']
+            features = ['SMA_50', 'SMA_200', 'RSI', 'Volatility', 'Returns']
+            X = self.data[features]
+            y = self.data['Target']
             
-            # Divisão temporal (não aleatória para dados financeiros)
-            split = int(0.8 * len(X))
-            X_train, X_test = X[:split], X[split:]
-            y_train, y_test = y[:split], y[split:]
+            # Validação cruzada temporal
+            tscv = TimeSeriesSplit(n_splits=5)
+            accuracies = []
             
-            # Treino com warm_start
-            self.modelo.fit(X_train, y_train)
+            for train_index, test_index in tscv.split(X):
+                X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+                y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+                
+                self.model.fit(X_train, y_train)
+                accuracy = self.model.score(X_test, y_test)
+                accuracies.append(accuracy)
             
-            # Validação
-            pred = self.modelo.predict(X_test)
-            acuracia = accuracy_score(y_test, pred)
-            self.historico_acuracia.append(acuracia)
+            mean_accuracy = np.mean(accuracies)
+            self.save_model()
             
-            # Auto-correção se performance cair
-            if len(self.historico_acuracia) > 5:
-                if np.mean(self.historico_acuracia[-3:]) < 0.5:
-                    st.warning("Auto-correção: Performance baixa, resetando modelo")
-                    self.criar_novo_modelo()
+            return mean_accuracy
             
-            # Salva o modelo com hash de segurança
-            joblib.dump(self.modelo, 'modelo_btc_ai.pkl')
-            with open('modelo_btc_ai.pkl', 'rb') as f:
-                modelo_hash = hashlib.md5(f.read()).hexdigest()
-            
-            st.session_state['model_hash'] = modelo_hash
-            self.ultimo_treinamento = datetime.now()
-            
-            return acuracia
         except Exception as e:
-            st.error(f"Erro no treino: {str(e)}")
+            st.error(f"Erro no treinamento: {str(e)}")
             return 0
     
-    def prever(self, dados):
-        """Faz previsões com tratamento de erros"""
+    def predict_signals(self):
+        """Gera sinais de trading"""
+        if self.data is None:
+            return None
+            
+        features = ['SMA_50', 'SMA_200', 'RSI', 'Volatility', 'Returns']
+        X = self.data[features]
+        
         try:
-            X = dados[['SMA_50', 'SMA_200', 'RSI', 'Volume']]
-            return self.modelo.predict(X)
+            return self.model.predict(X)
         except:
-            return np.zeros(len(dados))
+            return np.zeros(len(X))
 
 # Interface principal
-ai = AprendizBTC()
+ai = BitcoinAI()
 
-# Controles
+# Sidebar
 with st.sidebar:
     st.header("Controle da IA")
-    if st.button("🔄 Treinar Agora"):
-        with st.spinner("Treinando IA..."):
-            dados = ai.preparar_dados()
-            if not dados.empty:
-                acuracia = ai.treinar_continuamente(dados)
-                st.success(f"Acurácia: {acuracia:.2%}")
+    
+    if st.button("🔄 Carregar Dados e Treinar"):
+        with st.spinner("Processando..."):
+            if ai.load_data():
+                accuracy = ai.train_model()
+                st.success(f"Treinamento completo! Acurácia: {accuracy:.2%}")
     
     st.markdown("---")
     st.header("Configurações")
-    auto_treino = st.checkbox("Auto-treino diário", True)
-    alertas = st.checkbox("Alertas de mercado", True)
+    auto_update = st.checkbox("Atualização automática", True)
+    show_details = st.checkbox("Mostrar detalhes técnicos", False)
     
-    if st.button("🧹 Limpar Modelo"):
-        ai.criar_novo_modelo()
-        st.success("Modelo resetado!")
+    if st.button("🆕 Criar Novo Modelo"):
+        ai.create_new_model()
+        st.success("Modelo reinicializado!")
 
-# Dados e Previsões
-dados = ai.preparar_dados()
-if not dados.empty:
-    dados['Previsao'] = ai.prever(dados)
+# Conteúdo principal
+if ai.load_data():
+    predictions = ai.predict_signals()
+    ai.data['Signal'] = predictions
     
-    # Gráfico Interativo
+    # Gráfico interativo
     fig = go.Figure()
     
-    # Preço BTC
+    # Preço do BTC
     fig.add_trace(go.Scatter(
-        x=dados.index,
-        y=dados['Close'],
+        x=ai.data.index,
+        y=ai.data['Close'],
         name='Preço BTC',
-        line=dict(color='#F7931A', width=2)
+        line=dict(color='#F7931A', width=2),
+        hovertemplate="<b>Preço:</b> %{y:.2f} USD<extra></extra>"
     ))
     
     # Sinais de Compra
-    compras = dados[dados['Previsao'] == 1]
+    buy_signals = ai.data[ai.data['Signal'] == 1]
     fig.add_trace(go.Scatter(
-        x=compras.index,
-        y=compras['Close'] * 0.98,
+        x=buy_signals.index,
+        y=buy_signals['Close'] * 0.98,
         mode='markers+text',
         marker=dict(
             color='#00FF7F',
@@ -183,81 +207,87 @@ if not dados.empty:
         ),
         text="COMPRA",
         textposition="top center",
-        name='Sinal IA'
+        name='Sinal de Compra',
+        hovertemplate="<b>Sinal de Compra</b><br>%{y:.2f} USD<extra></extra>"
     ))
     
-    # Configurações do Gráfico
+    # Médias Móveis
+    fig.add_trace(go.Scatter(
+        x=ai.data.index,
+        y=ai.data['SMA_50'],
+        name='Média 50 Dias',
+        line=dict(color='#1E90FF', width=1),
+        visible='legendonly'
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=ai.data.index,
+        y=ai.data['SMA_200'],
+        name='Média 200 Dias',
+        line=dict(color='#FF6347', width=1),
+        visible='legendonly'
+    ))
+    
+    # Layout
     fig.update_layout(
-        title='BTC/USD - Sinais da IA',
+        title='BTC/USD - Sinais de Trading Inteligente',
         xaxis_title='Data',
         yaxis_title='Preço (USD)',
-        height=600,
+        hovermode='x unified',
+        height=700,
         template='plotly_dark',
-        hovermode='x unified'
+        showlegend=True
     )
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Status da IA
-    with st.expander("📊 Status do Aprendizado"):
-        col1, col2 = st.columns(2)
-        col1.metric("Último Treino", ai.ultimo_treinamento.strftime("%d/%m/%Y %H:%M") 
-                   if ai.ultimo_treinamento else "Nunca")
-        
-        if ai.historico_acuracia:
-            col2.metric("Acurácia Atual", f"{ai.historico_acuracia[-1]:.2%}")
+    # Detalhes técnicos
+    if show_details:
+        with st.expander("📊 Métricas Detalhadas"):
+            st.write("**Últimos Sinais:**")
+            st.dataframe(ai.data[['Close', 'SMA_50', 'RSI', 'Signal']].tail(10))
             
-            st.line_chart(pd.DataFrame({
-                'Acurácia': ai.historico_acuracia,
-                'Média Móvel': pd.Series(ai.historico_acuracia).rolling(5).mean()
-            }))
-    
-    # Alertas
-    if alertas and not dados.empty:
-        ultimo_sinal = dados['Previsao'].iloc[-1]
-        if ultimo_sinal == 1:
-            st.success("🚨 ALERTA IA: Sinal de COMPRA ativo!")
-        elif ultimo_sinal == 0 and dados['Previsao'].iloc[-2] == 1:
-            st.warning("⚠️ ALERTA IA: Sinal de compra expirou")
+            st.write("**Distribuição de Sinais:**")
+            st.bar_chart(ai.data['Signal'].value_counts())
+            
+            if hasattr(ai.model, 'feature_importances_'):
+                st.write("**Importância das Features:**")
+                features = ['SMA_50', 'SMA_200', 'RSI', 'Volatility', 'Returns']
+                importance = pd.DataFrame({
+                    'Feature': features,
+                    'Importance': ai.model.feature_importances_
+                }).sort_values('Importance', ascending=False)
+                
+                st.bar_chart(importance.set_index('Feature'))
 
-# Sistema de Auto-treinamento
-if auto_treino and ('ultimo_auto_treino' not in st.session_state or 
-                   (datetime.now() - st.session_state.ultimo_auto_treino).days >= 1):
-    with st.spinner("Auto-treinamento em progresso..."):
-        dados = ai.preparar_dados()
-        if not dados.empty:
-            acuracia = ai.treinar_continuamente(dados)
-            st.session_state.ultimo_auto_treino = datetime.now()
-            st.toast(f"Auto-treinamento completo! Acurácia: {acuracia:.2%}")
+# Sistema de auto-atualização
+if auto_update and ('last_update' not in st.session_state or 
+                   (datetime.now() - st.session_state.last_update).days >= 1):
+    with st.spinner("Atualizando automaticamente..."):
+        if ai.load_data():
+            accuracy = ai.train_model()
+            st.session_state.last_update = datetime.now()
+            st.toast(f"Modelo atualizado! Acurácia: {accuracy:.2%}")
 
-# Explicação do Sistema
-with st.expander("🤖 Como Funciona a IA"):
+# Documentação
+with st.expander("📚 Guia do Usuário"):
     st.markdown("""
-    ## Sistema de Autoaprendizado Contínuo
+    ## Como Funciona o Sistema
     
-    **1. Coleta de Dados**  
-    - Baixa dados históricos do BTC-USD
-    - Adiciona indicadores técnicos (SMA, RSI)
+    1. **Coleta de Dados**: Obtém dados históricos do Bitcoin
+    2. **Análise Técnica**: Calcula indicadores como RSI e médias móveis
+    3. **Modelo de IA**: Random Forest que aprende padrões de mercado
+    4. **Sinais**: Gera recomendações de compra baseadas na análise
     
-    **2. Engenharia de Features**  
-    - Normalização automática
-    - Tratamento de valores faltantes
+    ## Configuração Recomendada
+    - Mantenha a **atualização automática** ativada
+    - Monitore a acurácia do modelo
+    - Use em conjunto com outros indicadores
     
-    **3. Modelo de IA**  
-    - Random Forest com warm_start (permite aprendizado contínuo)
-    - Auto-correção quando a performance cai
-    
-    **4. Monitoramento**  
-    - Acurácia em tempo real
-    - Alertas automáticos
-    - Atualização diária
-    
-    ## Configurações Recomendadas
-    - Mantenha o **auto-treino diário** ativado
-    - Monitore a acurácia no painel de status
-    - Resetar o modelo se a performance cair abaixo de 50%
+    ## Dicas
+    - Sinais são mais confiáveis em tendências claras
+    - Combine com análise fundamentalista
+    - Sempre use gerenciamento de risco
     """)
 
-# Rodapé
-st.markdown("---")
-st.caption("Sistema IA BTC v2.0 - Atualizado em " + datetime.now().strftime("%d/%m/%Y"))
+st.caption(f"Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
