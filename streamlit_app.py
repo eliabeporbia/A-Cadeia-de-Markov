@@ -2,334 +2,154 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from datetime import datetime, timedelta
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+import joblib
+import os
 import plotly.graph_objects as go
-from datetime import datetime
 
 # Configuração do app
 st.set_page_config(layout="wide")
-st.title("📊 Indicador Markov-Queue BTC - Versão Premium Completa")
+st.title("🤖 Indicador BTC Autoajustável")
 
-# Sidebar com parâmetros principais e avançados
-with st.sidebar:
-    st.header("Configurações Principais")
-    data_inicio = st.date_input("Data inicial", datetime(2023, 1, 1))
-    data_fim = st.date_input("Data final", datetime.today())
-    periodo_rsi = st.slider("Período do RSI", 2, 50, 14)
-    periodo_sma = st.slider("Período da SMA", 50, 500, 200)
-    
-    st.markdown("---")
-    st.header("Filtros Avançados")
-    usar_volume = st.checkbox("Considerar volume", True)
-    usar_macd = st.checkbox("Mostrar MACD", True)
-    threshold_rsi = st.slider("Limiar RSI para confirmação", 50, 70, 65)
-    usar_breakout = st.checkbox("Exigir rompimento das BB", False)
-    theme = st.selectbox("Tema do Gráfico", ["plotly", "plotly_white", "plotly_dark", "ggplot2", "seaborn"])
-    
-    st.markdown("---")
-    st.header("Configurações de Alerta")
-    alerta_bull = st.checkbox("Alertar Bull Market", True)
-    alerta_bear = st.checkbox("Alertar Bear Market", True)
+# Carregar modelo existente ou criar novo
+def carregar_modelo():
+    if os.path.exists('modelo_btc.pkl'):
+        modelo = joblib.load('modelo_btc.pkl')
+        st.sidebar.success("Modelo carregado com sucesso!")
+        return modelo
+    else:
+        st.sidebar.info("Criando novo modelo...")
+        return RandomForestClassifier(n_estimators=100, random_state=42)
 
-# Função para baixar dados - VERSÃO CORRIGIDA
+modelo = carregar_modelo()
+
+# Função para criar features
+def criar_features(df):
+    # Indicadores técnicos básicos
+    df['SMA_50'] = df['Close'].rolling(50).mean()
+    df['SMA_200'] = df['Close'].rolling(200).mean()
+    df['RSI'] = 100 - (100 / (1 + (df['Close'].diff().clip(lower=0).rolling(14).mean() / 
+                       -df['Close'].diff().clip(upper=0).rolling(14).mean()))
+    
+    # Bollinger Bands
+    df['BB_Upper'] = df['Close'].rolling(20).mean() + 2*df['Close'].rolling(20).std()
+    df['BB_Lower'] = df['Close'].rolling(20).mean() - 2*df['Close'].rolling(20).std()
+    
+    # Outras features
+    df['Retorno_1D'] = df['Close'].pct_change()
+    df['Retorno_7D'] = df['Close'].pct_change(7)
+    df['Volatilidade'] = df['Close'].rolling(7).std()
+    
+    return df.dropna()
+
+# Função para criar target (rótulos)
+def criar_target(df, dias_futuro=3):
+    df['Target'] = (df['Close'].shift(-dias_futuro) > df['Close']).astype(int)
+    return df.dropna()
+
+# Baixar e preparar dados
 @st.cache_data
 def carregar_dados():
-    try:
-        # Baixar dados e converter para estrutura unidimensional
-        dados = yf.download("BTC-USD", 
-                          start=data_inicio, 
-                          end=data_fim + pd.Timedelta(days=1),
-                          progress=False)
-        
-        if dados.empty:
-            return pd.DataFrame()
-            
-        # CORREÇÃO DO ERRO: Converter para Series e garantir estrutura 1D
-        if isinstance(dados, pd.DataFrame):
-            close_data = dados['Close'].squeeze()  # Converte para Series 1D
-            volume_data = dados['Volume'].squeeze() if 'Volume' in dados else None
-            
-            # Criar DataFrame garantindo estrutura correta
-            df = pd.DataFrame({
-                'Close': close_data.values if hasattr(close_data, 'values') else close_data
-            }, index=dados.index)
-            
-            if volume_data is not None:
-                df['Volume'] = volume_data.values if hasattr(volume_data, 'values') else volume_data
-                
-            return df
-            
-        return pd.DataFrame()
-    except Exception as erro:
-        st.error(f"Erro ao baixar dados: {str(erro)}")
-        return pd.DataFrame()
+    end_date = datetime.today()
+    start_date = end_date - timedelta(days=365*3)  # 3 anos de dados
+    
+    dados = yf.download("BTC-USD", start=start_date, end=end_date)
+    dados = criar_features(dados)
+    dados = criar_target(dados)
+    return dados
 
-# Carregar dados
-dados_btc = carregar_dados()
+dados = carregar_dados()
 
-if not dados_btc.empty:
-    # Cálculos técnicos básicos
-    dados_btc['SMA'] = dados_btc['Close'].rolling(periodo_sma).mean()
+# Treinar/atualizar modelo
+if st.sidebar.button("Atualizar Modelo"):
+    X = dados[['SMA_50', 'SMA_200', 'RSI', 'BB_Upper', 'BB_Lower', 'Retorno_1D', 'Retorno_7D', 'Volatilidade']]
+    y = dados['Target']
     
-    # Cálculo do RSI
-    delta = dados_btc['Close'].diff()
-    ganho = delta.clip(lower=0)
-    perda = -delta.clip(upper=0)
-    media_ganho = ganho.rolling(periodo_rsi).mean()
-    media_perda = perda.rolling(periodo_rsi).mean().replace(0, np.nan)
-    dados_btc['RSI'] = 100 - (100 / (1 + (media_ganho / media_perda)))
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
     
-    # Bollinger Bands
-    rolling_mean = dados_btc['Close'].rolling(20).mean()
-    rolling_std = dados_btc['Close'].rolling(20).std()
-    dados_btc['BB_Upper'] = rolling_mean + 2 * rolling_std
-    dados_btc['BB_Lower'] = rolling_mean - 2 * rolling_std
-    dados_btc['BB_Width'] = ((dados_btc['BB_Upper'] - dados_btc['BB_Lower']) / rolling_mean) * 100
+    modelo.fit(X_train, y_train)
+    predicoes = modelo.predict(X_test)
+    acuracia = accuracy_score(y_test, predicoes)
     
-    # Indicadores adicionais (MELHORIAS MANTIDAS)
-    if usar_macd:
-        ema12 = dados_btc['Close'].ewm(span=12, adjust=False).mean()
-        ema26 = dados_btc['Close'].ewm(span=26, adjust=False).mean()
-        dados_btc['MACD'] = ema12 - ema26
-        dados_btc['Sinal'] = dados_btc['MACD'].ewm(span=9, adjust=False).mean()
-    
-    if usar_volume and 'Volume' in dados_btc:
-        dados_btc['Volume_MA'] = dados_btc['Volume'].rolling(20).mean()
-    
-    # Remover NaN
-    dados_btc = dados_btc.dropna()
-    
-    # Definir estados com condições aprimoradas (MELHORIAS MANTIDAS)
-    condicoes = [
-        (dados_btc['Close'] > dados_btc['SMA']) & 
-        (dados_btc['RSI'] > threshold_rsi) &
-        (dados_btc['Close'] > dados_btc['BB_Upper'] if usar_breakout else True),
-        
-        (dados_btc['Close'] < dados_btc['SMA']) & 
-        (dados_btc['RSI'] < (100 - threshold_rsi)) &
-        (dados_btc['Close'] < dados_btc['BB_Lower'] if usar_breakout else True),
-        
-        (dados_btc['BB_Width'] < 0.5)
-    ]
-    dados_btc['Estado'] = np.select(condicoes, ['Bull', 'Bear', 'Consolid'], 'Neutro')
+    joblib.dump(modelo, 'modelo_btc.pkl')
+    st.sidebar.success(f"Modelo atualizado! Acurácia: {acuracia:.2%}")
 
-    # Gráfico principal (MELHORIAS MANTIDAS)
-    fig = go.Figure()
-    
-    # Preço e SMA
-    fig.add_trace(go.Scatter(
-        x=dados_btc.index,
-        y=dados_btc['Close'],
-        name='Preço BTC',
-        line=dict(color='gold')
-    ))
-    fig.add_trace(go.Scatter(
-        x=dados_btc.index,
-        y=dados_btc['SMA'],
-        name=f'SMA {periodo_sma}',
-        line=dict(color='orange', dash='dot')
-    ))
-    
-    # Bollinger Bands
-    fig.add_trace(go.Scatter(
-        x=dados_btc.index,
-        y=dados_btc['BB_Upper'],
-        name='BB Superior',
-        line=dict(color='rgba(70, 130, 180, 0.5)')
-    ))
-    fig.add_trace(go.Scatter(
-        x=dados_btc.index,
-        y=dados_btc['BB_Lower'],
-        name='BB Inferior',
-        line=dict(color='rgba(70, 130, 180, 0.5)')
-    ))
-    
-    # MACD se ativado (MELHORIA MANTIDA)
-    if usar_macd:
-        fig.add_trace(go.Scatter(
-            x=dados_btc.index,
-            y=dados_btc['MACD'],
-            name='MACD',
-            line=dict(color='blue'),
-            yaxis='y2'
-        ))
-        fig.add_trace(go.Scatter(
-            x=dados_btc.index,
-            y=dados_btc['Sinal'],
-            name='Sinal MACD',
-            line=dict(color='red'),
-            yaxis='y2'
-        ))
-    
-    # Volume se ativado (MELHORIA MANTIDA)
-    if usar_volume and 'Volume' in dados_btc:
-        fig.add_trace(go.Bar(
-            x=dados_btc.index,
-            y=dados_btc['Volume'],
-            name='Volume',
-            marker_color='rgba(100, 100, 100, 0.3)',
-            yaxis='y3'
-        ))
-    
-    # Áreas coloridas para estados
-    cores_estado = {
-        'Bull': 'rgba(46,139,87,0.2)',
-        'Bear': 'rgba(178,34,34,0.2)',
-        'Consolid': 'rgba(30,144,255,0.2)'
-    }
-    
-    for estado, cor in cores_estado.items():
-        mask = dados_btc['Estado'] == estado
-        changes = mask.astype(int).diff()
-        starts = dados_btc.index[changes == 1]
-        ends = dados_btc.index[changes == -1]
-        
-        if len(starts) > 0:
-            if len(starts) > len(ends):
-                ends = list(ends) + [dados_btc.index[-1]]
-            
-            for start, end in zip(starts, ends):
-                fig.add_vrect(
-                    x0=start, x1=end,
-                    fillcolor=cor, layer="below",
-                    line_width=0
-                )
+# Fazer previsões
+dados['Previsao'] = modelo.predict(dados[['SMA_50', 'SMA_200', 'RSI', 'BB_Upper', 'BB_Lower', 
+                                        'Retorno_1D', 'Retorno_7D', 'Volatilidade']])
 
-    # Layout do gráfico (MELHORIA MANTIDA)
-    fig.update_layout(
-        title=f'BTC/USD - Markov-Queue Indicator (Último: {dados_btc["Close"].iloc[-1]:.2f} USD)',
-        xaxis_title='Data',
-        yaxis_title='Preço (USD)',
-        hovermode='x unified',
-        showlegend=True,
-        height=700,  # Aumentado para acomodar mais indicadores
-        template=theme,
-        yaxis2=dict(
-            title='MACD',
-            overlaying='y',
-            side='right',
-            showgrid=False
-        ),
-        yaxis3=dict(
-            title='Volume',
-            overlaying='y',
-            side='left',
-            anchor='free',
-            position=0.05,
-            showgrid=False
-        )
-    )
+# Visualização
+fig = go.Figure()
 
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Alertas de mudança de estado (MELHORIA MANTIDA)
-    ultimo_estado = dados_btc['Estado'].iloc[-1]
-    penultimo_estado = dados_btc['Estado'].iloc[-2] if len(dados_btc) > 1 else None
+# Preço
+fig.add_trace(go.Scatter(x=dados.index, y=dados['Close'], name='Preço BTC', line=dict(color='gold')))
 
-    if ultimo_estado != penultimo_estado:
-        if alerta_bull and ultimo_estado == 'Bull':
-            st.success("🚨 NOVO SINAL: Bull Market detectado!")
-        elif alerta_bear and ultimo_estado == 'Bear':
-            st.error("🚨 NOVO SINAL: Bear Market detectado!")
-    
-    # Seção de análise de desempenho (MELHORIA MANTIDA)
-    st.subheader("📈 Análise de Desempenho")
-    
-    if st.checkbox("Mostrar análise de estratégia"):
-        dados_btc['Retorno'] = dados_btc['Close'].pct_change()
-        dados_btc['Estrategia'] = 0
-        dados_btc.loc[dados_btc['Estado'] == 'Bull', 'Estrategia'] = 1
-        dados_btc.loc[dados_btc['Estado'] == 'Bear', 'Estrategia'] = -1
-        dados_btc['Retorno_Strategy'] = dados_btc['Estrategia'].shift(1) * dados_btc['Retorno']
-        
-        fig_perf = go.Figure()
-        fig_perf.add_trace(go.Scatter(
-            x=dados_btc.index,
-            y=(1 + dados_btc['Retorno']).cumprod(),
-            name='Buy & Hold'
-        ))
-        fig_perf.add_trace(go.Scatter(
-            x=dados_btc.index,
-            y=(1 + dados_btc['Retorno_Strategy']).cumprod(),
-            name='Estratégia Markov-Queue'
-        ))
-        fig_perf.update_layout(
-            title='Desempenho Comparativo',
-            yaxis_title='Retorno Acumulado',
-            template=theme
-        )
-        st.plotly_chart(fig_perf, use_container_width=True)
-    
-    # Últimos sinais com formatação condicional (MELHORIA MANTIDA)
-    st.subheader("📊 Últimos Sinais")
-    st.dataframe(
-        dados_btc.tail(10)[['Close', 'SMA', 'RSI', 'BB_Width', 'Estado']].style.format({
-            'Close': '{:.2f}', 
-            'SMA': '{:.2f}', 
-            'RSI': '{:.1f}', 
-            'BB_Width': '{:.2f}%'
-        }).applymap(
-            lambda x: 'background-color: rgba(46,139,87,0.3)' if x == 'Bull' else 
-                     'background-color: rgba(178,34,34,0.3)' if x == 'Bear' else 
-                     'background-color: rgba(30,144,255,0.3)' if x == 'Consolid' else '',
-            subset=['Estado']
-        ),
-        use_container_width=True
-    )
-    
-    # Exportação de dados (MELHORIA MANTIDA)
-    if st.button("📤 Exportar dados para CSV"):
-        csv = dados_btc.to_csv(index=True)
-        st.download_button(
-            label="Baixar CSV",
-            data=csv,
-            file_name='dados_btc_indicador.csv',
-            mime='text/csv'
-        )
+# Sinais de compra
+compras = dados[dados['Previsao'] == 1]
+fig.add_trace(go.Scatter(
+    x=compras.index,
+    y=compras['Close'],
+    mode='markers',
+    marker=dict(color='green', size=8),
+    name='Sinal de Compra'
+))
 
-else:
-    st.warning("Não foi possível carregar os dados. Verifique sua conexão e as datas selecionadas.")
+# SMA
+fig.add_trace(go.Scatter(x=dados.index, y=dados['SMA_50'], name='SMA 50', line=dict(color='blue')))
+fig.add_trace(go.Scatter(x=dados.index, y=dados['SMA_200'], name='SMA 200', line=dict(color='red')))
 
-# Documentação e ajuda (MELHORIA MANTIDA)
-with st.expander("📚 Documentação e Ajuda"):
+# Layout
+fig.update_layout(
+    title='BTC/USD com Sinais Autoajustáveis',
+    xaxis_title='Data',
+    yaxis_title='Preço (USD)',
+    hovermode='x unified',
+    height=600
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# Explicação
+with st.expander("ℹ️ Como funciona este indicador autoajustável"):
     st.markdown("""
-    ## 📊 Indicador Markov-Queue BTC - Guia Completo
+    ## Sistema de Autoaprendizado
     
-    ### 🔍 Como interpretar os sinais:
-    - **🟢 Bull Market**:  
-      - *Condições*: Preço > SMA + RSI > limiar + (opcional: acima da BB Superior)  
-      - *Estratégia*: Considerar posições longas
+    Este indicador usa machine learning para:
     
-    - **🔴 Bear Market**:  
-      - *Condições*: Preço < SMA + RSI < (100 - limiar) + (opcional: abaixo da BB Inferior)  
-      - *Estratégia*: Considerar posições short
+    1. **Coletar dados históricos** do BTC
+    2. **Extrair features técnicas** (SMA, RSI, Bollinger Bands)
+    3. **Definir um alvo** (se o preço subirá nos próximos dias)
+    4. **Treinar um modelo** de classificação
+    5. **Ajustar-se automaticamente** com novos dados
     
-    - **🔵 Consolidação**:  
-      - *Condições*: Volatilidade baixa (BB Width < 0.5%)  
-      - *Estratégia*: Aguardar rompimento
+    ## Principais características:
     
-    - **⚪ Neutro**:  
-      - *Condições*: Sem sinal claro  
-      - *Estratégia*: Analisar outros fatores
+    - 🤖 **Autoaprendizado**: Melhora com o tempo ao ser re-treinado
+    - 🔄 **Auto-correção**: Ajusta-se a novas condições de mercado
+    - 📈 **Adaptabilidade**: Aprende padrões específicos do BTC
+    - 💾 **Persistência**: Salva o modelo entre sessões
     
-    ### ⚙️ Configurações recomendadas:
-    - **SMA**: 200 períodos para tendências longas  
-    - **RSI**: 14 períodos com limiar em 60/40  
-    - **Bollinger Bands**: 20 períodos com 2 desvios padrão
+    ## Como usar:
     
-    ### 📈 Indicadores Adicionais:
-    - **MACD**: Mostra convergência/divergência de médias móveis  
-    - **Volume**: Confirma força por trás dos movimentos de preço
-    
-    ### ⚠️ Observações:
-    - Este indicador deve ser usado em conjunto com outras análises
-    - Configure os parâmetros conforme seu estilo de trading
-    - Sempre utilize stop-loss e gerencie seu risco
+    1. Clique em "Atualizar Modelo" periodicamente
+    2. Observe os sinais de compra (pontos verdes)
+    3. O modelo mostrará sua confiança (acurácia)
+    4. O sistema continuará aprendendo com novos dados
     """)
 
-# Informações adicionais
-st.markdown("---")
-st.markdown("""
-**ℹ️ Sobre este indicador**:  
-O Markov-Queue BTC Indicator combina múltiplos indicadores técnicos para identificar tendências e condições de mercado.  
-Desenvolvido para operações de médio/longo prazo com Bitcoin. Atualizado em {}.
-""".format(datetime.now().strftime("%d/%m/%Y")))
+# Mostrar importância das features
+if st.checkbox("Mostrar importância das features"):
+    importancias = pd.DataFrame({
+        'Feature': ['SMA_50', 'SMA_200', 'RSI', 'BB_Upper', 'BB_Lower', 'Retorno_1D', 'Retorno_7D', 'Volatilidade'],
+        'Importância': modelo.feature_importances_
+    }).sort_values('Importância', ascending=False)
+    
+    st.bar_chart(importancias.set_index('Feature'))
+
+# Configurações avançadas
+with st.sidebar.expander("Configurações Avançadas"):
+    dias_previsao = st.slider("Dias para previsão", 1, 7, 3)
+    limite_confianca = st.slider("Limite de confiança", 0.5, 0.9, 0.7)
