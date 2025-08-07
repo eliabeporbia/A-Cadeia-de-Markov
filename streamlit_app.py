@@ -7,7 +7,7 @@ from datetime import datetime
 
 # Configuração do app
 st.set_page_config(layout="wide")
-st.title("📊 Indicador Markov-Queue BTC - Versão Final")
+st.title("📊 Indicador Markov-Queue BTC - Versão Final Estável")
 
 # Sidebar com parâmetros
 with st.sidebar:
@@ -17,18 +17,24 @@ with st.sidebar:
     periodo_rsi = st.slider("Período do RSI", 2, 50, 14)
     periodo_sma = st.slider("Período da SMA", 50, 500, 200)
 
-# Função para baixar dados - CORRIGIDA
+# Função para baixar dados - Versão Corrigida
 @st.cache_data
 def carregar_dados():
     try:
-        # Renomeando para evitar conflito com a função str()
+        # Baixar dados e garantir que retorna um DataFrame
         dados = yf.download("BTC-USD", 
                           start=data_inicio, 
                           end=data_fim + pd.Timedelta(days=1),
                           progress=False)
-        return dados['Close'].to_frame(name='Close')  # Garantindo estrutura correta
+        
+        # Verificar se temos dados e criar DataFrame corretamente
+        if not dados.empty:
+            # Criar novo DataFrame apenas com a coluna Close
+            df = pd.DataFrame({'Close': dados['Close'].values}, index=dados.index)
+            return df
+        return pd.DataFrame()
     except Exception as erro:
-        st.error(f"Erro ao baixar dados: {erro}")
+        st.error(f"Erro ao baixar dados: {str(erro)}")
         return pd.DataFrame()
 
 # Carregar dados
@@ -94,7 +100,7 @@ if not dados_btc.empty:
         
         if len(inicios) > 0:
             if len(inicios) > len(fins):
-                fins = fins.append(pd.Index([dados_btc.index[-1]]))
+                fins = list(fins) + [dados_btc.index[-1]]
             
             for inicio, fim in zip(inicios, fins):
                 figura.add_vrect(
