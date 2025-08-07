@@ -17,18 +17,22 @@ st.title("🤖 Indicador BTC Autoajustável")
 # Carregar modelo existente ou criar novo
 def carregar_modelo():
     if os.path.exists('modelo_btc.pkl'):
-        modelo = joblib.load('modelo_btc.pkl')
-        st.sidebar.success("Modelo carregado com sucesso!")
-        return modelo
+        try:
+            modelo = joblib.load('modelo_btc.pkl')
+            st.sidebar.success("Modelo carregado com sucesso!")
+            return modelo
+        except:
+            st.sidebar.warning("Erro ao carregar modelo. Criando novo modelo...")
+            return RandomForestClassifier(n_estimators=100, random_state=42)
     else:
         st.sidebar.info("Criando novo modelo...")
         return RandomForestClassifier(n_estimators=100, random_state=42)
 
 modelo = carregar_modelo()
 
-# Função para criar features - VERSÃO CORRIGIDA
+# Função para criar features
 def criar_features(df):
-    # Cálculo do RSI CORRIGIDO
+    # Cálculo do RSI
     delta = df['Close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -70,8 +74,8 @@ def carregar_dados():
 
 dados = carregar_dados()
 
-# Treinar/atualizar modelo
-if st.sidebar.button("Atualizar Modelo"):
+# Treinar/atualizar modelo - AGORA OBRIGATÓRIO
+def treinar_modelo():
     X = dados[['SMA_50', 'SMA_200', 'RSI', 'BB_Upper', 'BB_Lower', 'Retorno_1D', 'Retorno_7D', 'Volatilidade']]
     y = dados['Target']
     
@@ -82,9 +86,14 @@ if st.sidebar.button("Atualizar Modelo"):
     acuracia = accuracy_score(y_test, predicoes)
     
     joblib.dump(modelo, 'modelo_btc.pkl')
-    st.sidebar.success(f"Modelo atualizado! Acurácia: {acuracia:.2%}")
+    st.sidebar.success(f"Modelo treinado! Acurácia: {acuracia:.2%}")
+    return modelo
 
-# Fazer previsões
+# Treinar o modelo ao iniciar (ou usar o carregado se já existir)
+if not hasattr(modelo, 'feature_importances_'):
+    modelo = treinar_modelo()
+
+# Fazer previsões APÓS garantir que o modelo está treinado
 dados['Previsao'] = modelo.predict(dados[['SMA_50', 'SMA_200', 'RSI', 'BB_Upper', 'BB_Lower', 
                                         'Retorno_1D', 'Retorno_7D', 'Volatilidade']])
 
@@ -92,7 +101,7 @@ dados['Previsao'] = modelo.predict(dados[['SMA_50', 'SMA_200', 'RSI', 'BB_Upper'
 fig = go.Figure()
 
 # Preço
-fig.add_trace(go.Scatter(x=dados.index, y=dados['Close'], name='Preço BTC', line=dict(color='gold')))
+fig.add_trace(go.Scatter(x=dados.index, y=dados['Close'], name='Preço BTC', line=dict(color='gold'))
 
 # Sinais de compra
 compras = dados[dados['Previsao'] == 1]
@@ -119,7 +128,12 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# Explicação
+# Botão para retreinar manualmente
+if st.sidebar.button("Retreinar Modelo"):
+    modelo = treinar_modelo()
+    st.experimental_rerun()
+
+# Restante do seu código (explicação, importância das features, etc.)
 with st.expander("ℹ️ Como funciona este indicador autoajustável"):
     st.markdown("""
     ## Sistema de Autoaprendizado
@@ -141,7 +155,7 @@ with st.expander("ℹ️ Como funciona este indicador autoajustável"):
     
     ## Como usar:
     
-    1. Clique em "Atualizar Modelo" periodicamente
+    1. Clique em "Retreinar Modelo" periodicamente
     2. Observe os sinais de compra (pontos verdes)
     3. O modelo mostrará sua confiança (acurácia)
     4. O sistema continuará aprendendo com novos dados
