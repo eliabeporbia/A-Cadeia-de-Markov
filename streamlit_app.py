@@ -131,7 +131,7 @@ st.plotly_chart(fig, use_container_width=True)
 # Botão para retreinar manualmente
 if st.sidebar.button("Retreinar Modelo"):
     modelo = treinar_modelo()
-    st.experimental_rerun()
+    st.rerun()
 
 # Restante do seu código (explicação, importância das features, etc.)
 with st.expander("ℹ️ Como funciona este indicador autoajustável"):
