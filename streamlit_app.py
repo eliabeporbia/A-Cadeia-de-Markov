@@ -46,25 +46,24 @@ if not df.empty:
         # Calcular indicadores diretamente no DataFrame
         analysis_df['SMA'] = analysis_df['Close'].rolling(sma_period).mean()
         
-        # Cálculo do RSI CORRIGIDO (parêntese fechado)
+        # Cálculo do RSI
         delta = analysis_df['Close'].diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
         avg_gain = gain.rolling(rsi_period).mean()
         avg_loss = loss.rolling(rsi_period).mean()
-        rs = avg_gain / (avg_loss.replace(0, np.nan))  # Parêntese fechado aqui
+        rs = avg_gain / (avg_loss.replace(0, np.nan))  # Correção aplicada
         analysis_df['RSI'] = 100 - (100 / (1 + rs))
         
-        # Bollinger Bands
-        analysis_df['BB_Middle'] = analysis_df['Close'].rolling(20).mean()
-        analysis_df['BB_Upper'] = analysis_df['BB_Middle'] + 2 * analysis_df['Close'].rolling(20).std()
-        analysis_df['BB_Lower'] = analysis_df['BB_Middle'] - 2 * analysis_df['Close'].rolling(20).std()
+        # Bollinger Bands - CORREÇÃO AQUI (cálculo separado)
+        bb_middle = analysis_df['Close'].rolling(20).mean()
+        bb_std = analysis_df['Close'].rolling(20).std()
+        analysis_df['BB_Upper'] = bb_middle + (2 * bb_std)
+        analysis_df['BB_Lower'] = bb_middle - (2 * bb_std)
+        analysis_df['BB_Width'] = ((analysis_df['BB_Upper'] - analysis_df['BB_Lower']) / bb_middle) * 100
         
         # Remover linhas com valores NaN
         analysis_df = analysis_df.dropna()
-        
-        # Calcular largura das Bandas de Bollinger
-        analysis_df['BB_Width'] = ((analysis_df['BB_Upper'] - analysis_df['BB_Lower']) / analysis_df['BB_Middle']) * 100
         
         # Definir estados de mercado
         conditions = [
