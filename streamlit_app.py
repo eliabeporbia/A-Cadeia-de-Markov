@@ -101,7 +101,7 @@ dados['Previsao'] = modelo.predict(dados[['SMA_50', 'SMA_200', 'RSI', 'BB_Upper'
 fig = go.Figure()
 
 # Preço
-fig.add_trace(go.Scatter(x=dados.index, y=dados['Close'], name='Preço BTC', line=dict(color='gold'))
+fig.add_trace(go.Scatter(x=dados.index, y=dados['Close'], name='Preço BTC', line=dict(color='gold')))
 
 # Sinais de compra
 compras = dados[dados['Previsao'] == 1]
