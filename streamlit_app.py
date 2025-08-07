@@ -7,7 +7,7 @@ from datetime import datetime
 
 # Configuração do app
 st.set_page_config(layout="wide")
-st.title("📊 Indicador Markov-Queue BTC")
+st.title("📊 Indicador Markov-Queue BTC - Versão Estável")
 
 # Sidebar com parâmetros
 with st.sidebar:
@@ -17,53 +17,76 @@ with st.sidebar:
     rsi_period = st.slider("Período do RSI", 2, 50, 14)
     sma_period = st.slider("Período da SMA", 50, 500, 200)
 
-# Função para baixar dados
+# Função para baixar e preparar dados
 @st.cache_data
-def load_data():
+def load_and_prepare_data():
     try:
+        # Baixar dados
         data = yf.download("BTC-USD", start=start_date, end=end_date + pd.Timedelta(days=1))
-        return data[['Close']].dropna()
+        
+        if data.empty:
+            return pd.DataFrame()
+            
+        # Criar DataFrame com índice explícito
+        df = pd.DataFrame({
+            'Close': data['Close'].values
+        }, index=data.index)
+        
+        # Calcular SMA
+        df['SMA'] = df['Close'].rolling(sma_period).mean()
+        
+        # Cálculo do RSI seguro
+        delta = df['Close'].diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(rsi_period).mean()
+        avg_loss = loss.rolling(rsi_period).mean().replace(0, np.nan)
+        df['RSI'] = 100 - (100 / (1 + (avg_gain / avg_loss)))
+        
+        # Bollinger Bands com alinhamento garantido
+        bb_middle = df['Close'].rolling(20).mean()
+        bb_std = df['Close'].rolling(20).std()
+        df['BB_Upper'] = bb_middle + (2 * bb_std)
+        df['BB_Lower'] = bb_middle - (2 * bb_std)
+        df['BB_Width'] = ((df['BB_Upper'] - df['BB_Lower']) / bb_middle) * 100
+        
+        # Remover valores NaN
+        df = df.dropna()
+        
+        return df
+        
     except Exception as e:
-        st.error(f"Erro ao baixar dados: {e}")
+        st.error(f"Erro ao processar dados: {e}")
         return pd.DataFrame()
 
-# Carregar dados
-btc_data = load_data()
+# Carregar e preparar dados
+btc_data = load_and_prepare_data()
 
 if not btc_data.empty:
-    # Cálculos técnicos
-    btc_data = btc_data.copy()
-    btc_data['SMA'] = btc_data['Close'].rolling(sma_period).mean()
-    
-    # Cálculo do RSI
-    delta = btc_data['Close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(rsi_period).mean()
-    avg_loss = loss.rolling(rsi_period).mean().replace(0, np.nan)
-    btc_data['RSI'] = 100 - (100 / (1 + (avg_gain / avg_loss)))
-    
-    # Bollinger Bands - Versão simplificada e segura
-    bb_window = 20
-    btc_data['BB_Mid'] = btc_data['Close'].rolling(bb_window).mean()
-    btc_data['BB_Std'] = btc_data['Close'].rolling(bb_window).std()
-    btc_data['BB_Upper'] = btc_data['BB_Mid'] + (2 * btc_data['BB_Std'])
-    btc_data['BB_Lower'] = btc_data['BB_Mid'] - (2 * btc_data['BB_Std'])
-    btc_data['BB_Width'] = ((btc_data['BB_Upper'] - btc_data['BB_Lower']) / btc_data['BB_Mid']) * 100
-    
-    # Definir estados de mercado
+    # Definir estados de mercado com verificação de NaN
     conditions = [
-        (btc_data['Close'] > btc_data['SMA']) & (btc_data['RSI'] > 60),
-        (btc_data['Close'] < btc_data['SMA']) & (btc_data['RSI'] < 40),
-        (btc_data['BB_Width'] < 0.5)
+        btc_data['Close'].gt(btc_data['SMA']) & btc_data['RSI'].gt(60),
+        btc_data['Close'].lt(btc_data['SMA']) & btc_data['RSI'].lt(40),
+        btc_data['BB_Width'].lt(0.5)
     ]
     btc_data['Estado'] = np.select(conditions, ['Bull', 'Bear', 'Consolid'], 'Neutro')
-    btc_data = btc_data.dropna()
 
     # Gráfico principal
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=btc_data.index, y=btc_data['Close'], name='Preço BTC', line=dict(color='gold')))
-    fig.add_trace(go.Scatter(x=btc_data.index, y=btc_data['SMA'], name=f'SMA {sma_period}', line=dict(color='orange', dash='dot')))
+    
+    # Adicionar preço e SMA
+    fig.add_trace(go.Scatter(
+        x=btc_data.index,
+        y=btc_data['Close'],
+        name='Preço BTC',
+        line=dict(color='gold')
+    ))
+    fig.add_trace(go.Scatter(
+        x=btc_data.index,
+        y=btc_data['SMA'],
+        name=f'SMA {sma_period}',
+        line=dict(color='orange', dash='dot')
+    ))
     
     # Adicionar áreas coloridas
     color_map = {
@@ -74,13 +97,12 @@ if not btc_data.empty:
     
     for estado, color in color_map.items():
         mask = btc_data['Estado'] == estado
-        changes = mask.astype(int).diff()
-        starts = btc_data.index[changes == 1]
-        ends = btc_data.index[changes == -1]
+        starts = btc_data.index[mask & ~mask.shift(1).fillna(False)]
+        ends = btc_data.index[mask & ~mask.shift(-1).fillna(False)]
         
         if len(starts) > 0:
             if len(starts) > len(ends):
-                ends = np.append(ends, btc_data.index[-1])
+                ends = ends.append(pd.Index([btc_data.index[-1]]))
             
             for start, end in zip(starts, ends):
                 fig.add_vrect(
@@ -102,4 +124,13 @@ if not btc_data.empty:
     )
 
 else:
-    st.warning("Não foi possível carregar os dados do BTC. Verifique sua conexão com a internet.")
+    st.warning("Não foi possível carregar os dados. Verifique sua conexão e as datas selecionadas.")
+
+# Adicionar explicação
+with st.expander("ℹ️ Como interpretar os sinais"):
+    st.markdown("""
+    **🟢 Bull Market**: Preço > SMA + RSI > 60 (Considere comprar)  
+    **🔴 Bear Market**: Preço < SMA + RSI < 40 (Considere vender)  
+    **🔵 Consolidação**: Volatilidade baixa (BB Width < 0.5%)  
+    **⚪ Neutro**: Sem sinal claro
+    """)
