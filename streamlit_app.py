@@ -30,6 +30,7 @@ def carregar_modelo():
 
 # Funções para processamento de dados
 def criar_features(df):
+    df = df.copy()
     delta = df['Close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -57,7 +58,10 @@ def carregar_dados():
     end_date = datetime.today()
     start_date = end_date - timedelta(days=365*3)
     dados = yf.download("BTC-USD", start=start_date, end=end_date)
-    return criar_target(criar_features(dados))
+    dados = dados[['Close']].copy()
+    dados = criar_features(dados)
+    dados = criar_target(dados)
+    return dados
 
 # Treinamento do modelo
 def treinar_modelo(dados):
@@ -90,60 +94,60 @@ if 'ultimo_treinamento' not in st.session_state or (datetime.now() - st.session_
 dados['Previsao'] = modelo.predict(dados[['SMA_50', 'SMA_200', 'RSI', 'BB_Upper', 'BB_Lower', 
                                         'Retorno_1D', 'Retorno_7D', 'Volatilidade']])
 
-# Visualização aprimorada
+# Visualização corrigida
 fig = go.Figure()
 
-# Preço BTC
+# 1. Linha do Preço do BTC (PRINCIPAL)
 fig.add_trace(go.Scatter(
-    x=dados.index, 
-    y=dados['Close'], 
-    name='Preço BTC', 
-    line=dict(color='#F0B90B', width=2),
-    hovertemplate="<b>%{y:.2f} USD</b>"
+    x=dados.index,
+    y=dados['Close'],
+    name='Preço BTC',
+    line=dict(color='#F7931A', width=2),  # Laranja Bitcoin
+    hovertemplate="<b>Preço: %{y:.2f} USD</b><extra></extra>"
 ))
 
-# Sinais de COMPRA (destacados)
+# 2. Sinais de Compra (DESTAQUE)
 compras = dados[dados['Previsao'] == 1]
 fig.add_trace(go.Scatter(
     x=compras.index,
-    y=compras['Close'] * 0.98,
-    mode='markers+text',
+    y=compras['Close'],
+    mode='markers',
     marker=dict(
         color='#00FF7F',
-        size=15,
+        size=10,
         symbol='triangle-up',
-        line=dict(width=2, color='DarkSlateGrey')
+        line=dict(width=2, color='DarkGreen')
     ),
-    text="🟢 COMPRA",
-    textposition="top center",
     name='Sinal de Compra',
-    hovertemplate="<b>Sinal de compra</b><br>Preço: %{y:.2f} USD"
+    hovertemplate="<b>Sinal de Compra</b><br>Preço: %{y:.2f} USD<extra></extra>"
 ))
 
-# Médias móveis
+# 3. Médias Móveis (OPCIONAIS)
 fig.add_trace(go.Scatter(
-    x=dados.index, 
-    y=dados['SMA_50'], 
-    name='SMA 50', 
-    line=dict(color='#1E90FF', width=1.5),
+    x=dados.index,
+    y=dados['SMA_50'],
+    name='Média 50 Dias',
+    line=dict(color='#1E90FF', width=1),
     visible='legendonly'
 ))
+
 fig.add_trace(go.Scatter(
-    x=dados.index, 
-    y=dados['SMA_200'], 
-    name='SMA 200', 
-    line=dict(color='#FF6347', width=1.5),
+    x=dados.index,
+    y=dados['SMA_200'],
+    name='Média 200 Dias',
+    line=dict(color='#FF6347', width=1),
     visible='legendonly'
 ))
 
 # Layout profissional
 fig.update_layout(
-    title='<b>BTC/USD - Sinais de Trading Inteligentes</b>',
+    title='<b>Preço do Bitcoin com Sinais de Compra</b>',
     xaxis_title='Data',
     yaxis_title='Preço (USD)',
     hovermode='x unified',
     height=700,
     template='plotly_dark',
+    showlegend=True,
     legend=dict(
         orientation="h",
         yanchor="bottom",
@@ -163,30 +167,24 @@ with st.sidebar:
         modelo = treinar_modelo(dados)
         st.rerun()
     
-    st.info(f"Último treinamento: {st.session_state.ultimo_treinamento.strftime('%d/%m/%Y')}")
+    st.info(f"Último treinamento: {st.session_state.ultimo_treinamento.strftime('%d/%m/%Y %H:%M')}")
     
     with st.expander("⚙️ Configurações"):
         dias_previsao = st.slider("Horizonte de previsão (dias)", 1, 7, 3)
         st.caption("Recomendado: 3 dias para melhor acurácia")
 
 # Explicações
-with st.expander("📚 Guia Completo"):
+with st.expander("📚 Como Interpretar o Gráfico"):
     st.markdown("""
-    ## 🔍 Como Interpretar os Sinais
-    - **Seta verde 🟢**: Forte sinal de compra (modelo confiante na alta)
-    - **Preço dourado**: Valor atual do Bitcoin
-    - **Médias móveis**: Ative no legendário (ícone no canto superior direito)
+    ## 📊 Elementos do Gráfico:
+    - **Linha Laranja**: Preço histórico do Bitcoin (BTC-USD)
+    - **Marcadores Verdes**: Sinais de compra gerados pelo modelo
+    - **Médias Móveis**: Ative/desative na legenda (50 e 200 dias)
 
-    ## 🤖 Funcionamento do Autoaprendizado
-    O modelo se atualiza automaticamente:
-    - A cada 7 dias
-    - Quando novos dados estão disponíveis
-    - Manualmente via botão na sidebar
-    
-    Dados técnicos utilizados:
-    ```python
-    ['SMA_50', 'SMA_200', 'RSI', 'Bollinger Bands', 'Retornos', 'Volatilidade']
-    ```
+    ## 🔍 Dica:
+    - Zoom com mouse (selecione área)
+    - Passe o mouse sobre os pontos para detalhes
+    - Clique na legenda para mostrar/esconder elementos
     """)
 
 # Importância das features
@@ -196,4 +194,4 @@ if st.checkbox("📊 Mostrar importância dos indicadores"):
         'Importância': modelo.feature_importances_
     }).sort_values('Importância', ascending=False)
     
-    st.bar_chart(importancias.set_index('Indicador'), color='#F0B90B')
+    st.bar_chart(importancias.set_index('Indicador'), color='#F7931A')
